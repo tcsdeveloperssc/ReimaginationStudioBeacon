@@ -1,5 +1,6 @@
 package com.tcs.santaclara.reimaginationstudiobeacon;
 
+import android.app.ProgressDialog;
 import android.content.DialogInterface;
 import android.content.IntentSender;
 import android.provider.SyncStateContract;
@@ -26,6 +27,8 @@ import com.google.android.gms.nearby.messages.Strategy;
 import com.google.android.gms.nearby.messages.SubscribeCallback;
 import com.google.android.gms.nearby.messages.SubscribeOptions;
 
+import java.util.LinkedList;
+
 public class HomeActivity extends AppCompatActivity implements GoogleApiClient.ConnectionCallbacks,
         GoogleApiClient.OnConnectionFailedListener{
 
@@ -36,11 +39,15 @@ public class HomeActivity extends AppCompatActivity implements GoogleApiClient.C
     private boolean mResolvingError = false;
     private TextView displayTextView = null;
     private WebView beaconWebView = null;
+    private ProgressDialog progress = null;
+    private LinkedList<Message> cachedMessages = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_home);
+
+        cachedMessages = new LinkedList<Message>();
 
         displayTextView = (TextView) findViewById(R.id.beaconMessage);
 
@@ -60,11 +67,40 @@ public class HomeActivity extends AppCompatActivity implements GoogleApiClient.C
                 beaconWebView = (WebView) findViewById(R.id.beaconWebView);
                 beaconWebView.loadUrl(payload);
 
+                //add to cached messages
+                cachedMessages.add(message);
+                Log.i(TAG, "message added to cache: " + new String(message.getContent()));
             }
 
             // Called when a message is no longer detectable nearby.
             public void onLost(Message message) {
-                // Take appropriate action here (update UI, etc.)
+                Log.i(TAG, "message lost: "+ new String(message.getContent()));
+
+                //remove lost message from cache
+                cachedMessages.remove(message);
+                Log.i(TAG, "message removed from cache: " + new String(message.getContent()));
+                Log.i(TAG, "cache size: " + cachedMessages.size());
+
+                if(cachedMessages.size() == 0)
+                {
+                    //no beacons in range
+                    Log.i(TAG, "no beacons found");
+                    beaconWebView.loadUrl("https://s3-us-west-2.amazonaws.com/1077203beacon/Error.html");
+                }
+                else
+                {
+                    Message messageToDisplay = cachedMessages.getFirst();
+                    try
+                    {
+                        beaconWebView.loadUrl(new String(messageToDisplay.getContent()));
+                    }
+                    catch(Exception e)
+                    {
+                        Log.i(TAG, "error displaying cached message: " + e.getMessage());
+                    }
+                }
+
+
             }
         };
 
@@ -75,12 +111,6 @@ public class HomeActivity extends AppCompatActivity implements GoogleApiClient.C
                 .addOnConnectionFailedListener(this)
                 .build();
 
-        // Connect the GoogleApiClient.
-        if (!apiClient.isConnected()) {
-            if (!apiClient.isConnecting()) {
-                apiClient.connect();
-            }
-        }
     }
 
     @Override
@@ -102,7 +132,14 @@ public class HomeActivity extends AppCompatActivity implements GoogleApiClient.C
         // Subscribe to receive messages.
         Log.i(TAG, "Trying to subscribe.");
 
-//        else {
+        // Connect the GoogleApiClient.
+        if (!apiClient.isConnected()) {
+            if (!apiClient.isConnecting()) {
+                apiClient.connect();
+            }
+        }
+        else
+        {
             SubscribeOptions options = new SubscribeOptions.Builder()
                     .setStrategy(Strategy.BLE_ONLY)
                     .setCallback(new SubscribeCallback() {
@@ -126,6 +163,7 @@ public class HomeActivity extends AppCompatActivity implements GoogleApiClient.C
                             }
                         }
                     });
+        }
         }
 //    }
 
@@ -168,6 +206,7 @@ public class HomeActivity extends AppCompatActivity implements GoogleApiClient.C
             Nearby.Messages.unsubscribe(apiClient, beaconListener);
             if(beaconWebView  != null)
                 beaconWebView.loadUrl("about:blank");
+            Log.i(TAG, "unSubscribed");
         }
         catch(Exception e)
         {
@@ -180,6 +219,29 @@ public class HomeActivity extends AppCompatActivity implements GoogleApiClient.C
     @Override
     public void onConnected(Bundle bundle) {
         Log.i(TAG, "APICLIENT Connected");
+        SubscribeOptions options = new SubscribeOptions.Builder()
+                .setStrategy(Strategy.BLE_ONLY)
+                .setCallback(new SubscribeCallback() {
+                    @Override
+                    public void onExpired() {
+                        Log.i(TAG, "No longer subscribing.");
+                    }
+                }).build();
+
+        Nearby.Messages.subscribe(apiClient, beaconListener, options)
+                .setResultCallback(new ResultCallback<Status>() {
+                    @Override
+                    public void onResult(Status status) {
+                        if (status.isSuccess()) {
+                            Log.i(TAG, "Subscribed successfully.");
+                        } else {
+                            Log.i(TAG, "Could not subscribe.");
+                            // Check whether consent was given;
+                            // if not, prompt the user for consent.
+                            handleUnsuccessfulNearbyResult(status);
+                        }
+                    }
+                });
     }
 
     @Override
